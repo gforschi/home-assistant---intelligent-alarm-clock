@@ -1,0 +1,387 @@
+input_boolean:
+  person1_occupancy:
+    name: "Occupancy: Person 1"
+  person1_awake:
+    name: "Awake: Person 1"
+  person1_alarm_morningcoffee:
+    icon: mdi:coffee
+    name: "Morning coffee?"
+
+input_datetime:
+# This one determines the "manual" alarm time or the time the alarm should fire if there is no calendar events with and earlier time on the same day
+  person1_next_wakeup_latest:
+    name: The latest time to wake up
+    has_date: false
+    has_time: true
+input_number:
+# The volume to set for the speaker set for the alarm (TTS to google home mini)
+  person1_alarm_volume:
+    name: person1, alarm volume
+    icon: mdi:volume-medium
+    mode: slider
+    initial: 3
+    step: 0.5
+    min: 1
+    max: 5
+# How many times has the alarm fired - for escalating purposes
+  person1_wakeup_attempts:
+    name: 'person1, wake up!'
+    icon: mdi:repeat
+    initial: 1
+    step: 1
+    min: 1
+    max: 10
+# How many times has the "bedtime" notification fired
+  person1_bedtime_attempts:
+    name: 'person1, bedtime!'
+    icon: mdi:repeat
+    initial: 1
+    step: 1
+    min: 1
+    max: 10
+# The ideal amount of hours to sleep
+  person1_sleep_hours_max:
+    name: person1, max sleep
+    unit_of_measurement: h
+    icon: mdi:timer
+    step: 0.5
+    min: 6
+    initial: 9
+    max: 10
+# Time needed to prepare for a early calendar event (but not a manually set time)
+  person1_morning_routine:
+    name: person1, morning routine
+    unit_of_measurement: h
+    icon: mdi:timer
+    step: 0.25
+    min: 0
+    initial: 2
+    max: 3
+# When the person goes to bed, this timestamp is set and a ideal wakeup is calculated from this and the input_numbers for "sleep" and "morning routine"
+  person1_last_bedtime:
+    name: The time Person 1 went to bed last
+    min: 1574038800
+    max: 1893373200
+    step: 1
+
+input_select:
+# What events will the alarm (and bedtimes) be calculated from
+  person1_alarm_mode:
+    name: 'Alarm mode'
+    icon: mdi:calendar-clock
+    options:
+    - 'Full auto'
+    - 'Calendar'
+    - 'Manual'
+    - 'Off'
+
+binary_sensor:
+  - platform: template
+    sensors:
+# When waking up, a bedside button will switch the "input_boolean.person1_awake" to "on"
+# the reason for using a template binary_sensor is to make a "failsafe" so that a person can not be "sleeping" if he/she is not home
+      person1_awake:
+        friendly_name: Person1 is awake
+        value_template: >
+          {{ not (is_state('input_boolean.person1_awake', 'off') and is_state('input_boolean.person1_occupancy', 'on')) }}
+        icon_template: >
+          {% if not (is_state('input_boolean.person1_awake', 'off') and is_state('input_boolean.person1_occupancy', 'on')) %}
+            mdi:account
+          {% else %}
+            mdi:mdi:sleep
+          {% endif %}
+# person is home and awake - used to track how many persons that is in the house and is awake
+# when 0 persons is awake, but >0 persons is home it a "house-status" will set to "Sleeping"
+# when there are a mix of "sleeping" and "awake" persons - the "house-status" will be "Silent" - i use this to mute notifications etc
+      person1_home_awake:
+        friendly_name: "person1 is home & awake"
+        device_class: presence
+        value_template: >
+          {{ is_state('input_boolean.person1_occupancy', 'on')
+            and is_state('input_boolean.person1_awake', 'on') }}
+      person1_connected_wifi_bt:
+        device_class: presence
+        friendly_name: "Person1 BT/WiFi"
+        value_template: >
+          {{ (is_state('device_tracker.person1_wifi', 'home')
+            or is_state('device_tracker.person1_bt', 'home')) }}
+
+sensor:
+  - platform: template
+    sensors:
+# This sensor determines the earliest of events to happen in the next 24 hours
+# outputs the UNIX timestamp to be used for "bedtime" and "alarm" times in "Full Auto"-mode
+      person1_full_auto_alarm_timestamp:
+        friendly_name: person1s next auto alarm time
+        value_template: >
+          {% set next_calendar_wakeup = (as_timestamp(state_attr('calendar.person1gmailcom','start_time')) - (states('input_number.person1_morning_routine')|int*3600))|int %}
+          {% set next_bedtime_wakeup = (states('input_number.person1_last_bedtime')|int - ((states('input_number.person1_sleep_hours_max')|int)*3600))|int %}
+          {% if now().hour < 12 %}
+          {% set next_latest_wakeup = as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0)) %}
+          {% else %}
+          {% set next_latest_wakeup = (as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0))+(3600*24)) %}
+          {% endif %}
+          {% if next_calendar_wakeup < (as_timestamp(now()) + 86400) and next_calendar_wakeup > (as_timestamp(now()) - 7200) %}
+          {% set next_calendar = next_calendar_wakeup %}
+          {% else %}
+          {% set next_calendar = as_timestamp(now())|int + 86400 %}
+          {% endif %}
+          {% if next_bedtime_wakeup < (as_timestamp(now()) + 86400) and next_bedtime_wakeup > (as_timestamp(now())) %}
+          {% set from_bedtime = next_bedtime_wakeup %}
+          {% else %}
+          {% set from_bedtime = as_timestamp(now())|int + 86400 %}
+          {% endif %}
+          {% if next_latest_wakeup < (as_timestamp(now()) + 86400) and next_latest_wakeup > (as_timestamp(now()) - 7200) %}
+          {% set latest_wakeup = next_latest_wakeup %}
+          {% else %}
+          {% set latest_wakeup = as_timestamp(now())|int + 86400 %}
+          {% endif %}
+          {%set mylist = next_calendar,
+                         from_bedtime,
+                         latest_wakeup %}
+          {{ (mylist|min) }}
+# Should output a "human readable" date and time for reference depending on the mode set
+      person1_next_bedtime:
+        friendly_name: person1s next bedtime
+        value_template: >
+          {% if is_state('input_select.alarm_mode_person1', 'Full auto') %}
+            {{ (states('sensor.person1_full_auto_alarm_timestamp')|int
+            - ((states('input_number.person1_sleep_hours')|int + states('input_number.person1_morning_routine')|int)*3600))|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.alarm_mode_person1', 'Calendar') %}
+            {{ (as_timestamp(state_attr('calendar.person1gmailcom','start_time'))|int 
+            - ((states('input_number.person1_sleep_hours')|int + states('input_number.person1_morning_routine')|int)*3600))|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.alarm_mode_person1', 'Manual') %}
+            {% if now().hour < 12 %}
+              {% set next_latest_wakeup = (as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0)))
+              - ((states('input_number.person1_sleep_hours')|int + states('input_number.person1_morning_routine')|int)*3600) %}
+            {% else %}
+              {% set next_latest_wakeup = as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0))+(3600*24) %}
+            {% endif %}
+            {{ next_latest_wakeup|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Off') %}
+          {% endif %}
+# Should output a minute countdown to the bedtime calculated from the alarm time set
+# if the person is awake and home the notification will fire when this is below 0
+# In my use I have set this from the "minimum hours of sleep" input_number
+      person1_auto_bedtime_countdown:
+        entity_id:
+          - sensor.time
+          - input_datetime.person1_next_wakeup_latest
+          - input_select.person1_alarm
+        unit_of_measurement: min
+        value_template: >
+          {% if is_state('input_select.person1_alarm_mode', 'Full auto') %}
+            {{ (((states('sensor.person1_full_auto_alarm_timestamp')|int - as_timestamp(now()))/60) 
+            - ((states('input_number.person1_sleep_hours')|int + states('input_number.person1_morning_routine')|int)*60)) |round() }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Calendar') %}
+            {{ (((as_timestamp(states.calendar.person1gmailcom.attributes.start_time) - as_timestamp(now()))/3600) 
+            - (float(states.input_number.person1_sleep_hours.state) - float(states.input_number.person1_morning_routine.state)|int)*60) |round() }}
+          {% elif is_state('input_select.alarm_mode_person1', 'Manual') %}
+            {{(((float(states.input_datetime.person1_next_wakeup_latest.attributes.timestamp) - as_timestamp(now()))/60) 
+            - ((float(states('input_number.person1_sleep_hours')) + float(states('input_number.person1_morning_routine')))*60)) |round() }}
+          {% elif is_state('input_select.alarm_mode_person1', 'Off') %}
+            Off
+          {% endif %}
+        icon_template: mdi:clock-alert
+# Should output a readable date and time for reference
+      person1_next_wake_up_time:
+        friendly_name: person1s next wakeup time
+        value_template: >
+          {% if is_state('input_select.person1_alarm_mode', 'Full auto') %}
+            {{ (states('sensor.person1_full_auto_alarm_timestamp')|int)|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Calendar') %}
+            {{ (as_timestamp(state_attr('calendar.person1gmailcom', 'start_time'))
+            - (states('input_number.person1_morning_routine')|int)*3600)|int|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Manual') %}
+            {% if now().hour < 12 %}
+              {% set next_latest_wakeup = as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0)) %}
+            {% else %}
+              {% set next_latest_wakeup = as_timestamp(now().replace(hour=state_attr('input_datetime.person1_next_wakeup_latest','hour')).replace(minute=state_attr('input_datetime.person1_next_wakeup_latest','minute')).replace(second=0))+(3600*24) %}
+            {% endif %}
+            {{ next_latest_wakeup|timestamp_custom("%d.%m.%Y %H:%M") }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Off') %}
+          {% endif %}
+# Should output a minute countdown to the alarm time calculated
+# if the person is sleeping and home the notification will fire when this is below 0
+      person1_auto_alarm_countdown:
+        entity_id:
+          - sensor.time
+          - input_datetime.person1_next_wakeup_latest
+          - input_select.person1_alarm_mode
+        unit_of_measurement: min
+        value_template: >
+          {% if is_state('input_select.person1_alarm_mode', 'Full auto') %}
+            {{ (( states('sensor.person1_full_auto_alarm_timestamp')|int - as_timestamp(now()))/60)|round() }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Calendar') %}
+            {{ ((((as_timestamp(state_attr('calendar.person1gmailcom','start_time')) - (states('input_number.person1_morning_routine')|int*3600))|int) - as_timestamp(now()))/60)|round() }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Manual') %}
+            {{ ((float(states.input_datetime.person1_next_wakeup_latest.attributes.timestamp) - as_timestamp(now()))/60)|round() }}
+          {% elif is_state('input_select.person1_alarm_mode', 'Off') %}
+            Off
+          {% endif %}
+        icon_template: mdi:alarm
+        
+automation:
+  - alias: 'Person 1 - Auto bedtime alarm'
+    initial_state: true
+    trigger:
+      platform: time_pattern
+      minutes: /10
+      seconds: 15
+    condition:
+    - condition: state
+      entity_id: binary_sensor.person1_home_awake
+      state: 'on'
+    - condition: numeric_state
+      above: '-60'
+      below: '0'
+      entity_id: sensor.person1_auto_bedtime_countdown
+    - condition: time
+      after: '22:00:00'
+      before: 03:00:00
+    action:
+    - data_template:
+        entity_id: media_player.lr_googlehome
+        language: 'en'
+        message: >
+          Person 1! Its time to go to bed.
+          {% if states('sensor.person1_auto_bedtime_countdown')|int < -30 %}
+          It is {{states('sensor.person1_auto_bedtime_countdown')|int}} minutes since you should be in bed.
+          {% endif %}
+          {% if states('input_number.person1_bedtime_attempts')|int > 1 %}
+          This is the {{states('input_number.person1_bedtime_attempts')|int}}. notification
+          {% endif %}
+      service: tts.google_say
+    - service: input_number.increment
+      entity_id: input_number.person1_bedtime_attempts
+  - alias: 'Person 1 - Auto alarm clock'
+    initial_state: true
+    trigger:
+    - entity_id: sensor.person1_auto_alarm_countdown
+      platform: numeric_state
+      below: '0'
+    - entity_id: input_number.person1_wakeup_attempts
+      platform: state
+    condition:
+    - condition: state
+      entity_id: 'binary_sensor.person1_connected_wifi_bt'
+      state: 'on'
+    - condition: state
+      entity_id: 'binary_sensor.person1_awake'
+      state: 'off'
+    action:
+    - service: media_player.volume_set
+      data_template:
+        entity_id: media_player.bedroom_speaker
+        volume_level: >
+          {{ (states.input_number.alarm_volume_person1.state|float /10) |round(2) }}
+    - service: tts.google_say
+      entity_id: media_player.bedroom_speaker
+      data_template:
+        language: 'en'
+        message: >
+          Person 1! Time to wake up.
+          {% if states('input_number.person1_wakeup_attempts')|int > 1 %}
+          This is the {{states('input_number.grethe_wakeup_attempts')|int}}. notification.
+          {% endif %}
+          {% if states('sensor.grethe_auto_alarm_countdown')|int < -5 %}
+          It is {{states('sensor.person1_auto_alarm_countdown')|int|abs}} minutes since your alarm time.
+          {% endif %}
+    - delay: '00:05:00'
+    - service: input_number.set_value
+      data_template:
+        entity_id: input_number.person1_wakeup_attempts
+        value: "{{ states('input_number.person1_wakeup_attempts')|int +1 }}"
+# idea of this is to turn on the coffee brewer when the person awakes and the option for "morningcoffee" is set "on"
+    - condition: state
+      entity_id: binary_sensor.person1_awake
+      state: 'on'
+    - condition: state
+      entity_id: input_boolean.person1_alarm_morningcoffee
+      state: 'on'
+    - data:
+        entity_id: switch.coffeemachine_switch
+      service: switch.turn_on
+
+  - alias: 'Someone arrived or left'
+    initial_state: 'on'
+    trigger:
+    - platform: state
+      entity_id: binary_sensor.person1_occupancy
+      for: '00:01:00'
+    - platform: state
+      entity_id: binary_sensor.person2_occupancy
+      for: '00:01:00'
+    condition: []
+    action:
+    - service: input_number.set_value
+      data_template:
+        entity_id: >
+          {% if trigger.entity_id == 'binary_sensor.person1_occupancy' and trigger.to_state.state == 'on' %}
+            input_number.person1_last_arrival
+          {% elif trigger.entity_id == 'binary_sensor.person1_occupancy' and trigger.to_state.state == 'off' %}
+            input_number.person1_last_departure
+          {% elif trigger.entity_id == 'binary_sensor.person2_occupancy' and trigger.to_state.state == 'on' %}
+            input_number.person2_last_departure
+          {% elif trigger.entity_id == 'binary_sensor.person2_occupancy' and trigger.to_state.state == 'off' %}
+            input_number.person2_last_departure
+          {% else %}
+          {% endif %}
+        value: "{{ as_timestamp(now())|int }}"
+    - service: input_number.set_value
+      data_template:
+        entity_id: >
+          {% if trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'on' %}
+            input_number.person1_wake_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'off' %}
+            input_number.person1_bedtime_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'on' %}
+            input_number.person2_wake_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'off' %}
+            input_number.person2_bedtime_attempts
+          {% else %}
+          {% endif %}
+        value: 0
+  - alias: 'Someone woke up or went to bed'
+    initial_state: 'on'
+    trigger:
+    - platform: state
+      entity_id: binary_sensor.person1_awake
+    - platform: state
+      entity_id: binary_sensor.person2_awake
+    condition: []
+    action:
+    - service: input_number.set_value
+      data_template:
+        entity_id: >
+          {% if trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'on' %}
+            input_number.person1_wakeup_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'off' %}
+            input_number.person1_bedtime_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'on' %}
+            input_number.person2_wakeup_attempts
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'off' %}
+            input_number.person2_bedtime_attempts
+          {% endif %}
+        value: '0'
+    - service: input_number.set_value
+      data_template:
+        entity_id: >
+          {% if trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'on' %}
+            input_number.person1_last_wakeup
+          {% elif trigger.entity_id == 'binary_sensor.person1_awake' and trigger.to_state.state == 'off' %}
+            input_number.person1_last_bedtime
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'on' %}
+            input_number.person2_last_wakeup
+          {% elif trigger.entity_id == 'binary_sensor.person2_awake' and trigger.to_state.state == 'off' %}
+            input_number.person2_last_bedtime
+          {% endif %}
+        value: "{{ as_timestamp(now())|int }}"
+    - service: tts.google_say
+      entity_id: media_player.bedroom_speaker
+      data_template:
+        language: 'en'
+        message: >
+          {% if trigger.entity_id == 'binary_sensor.person1_awake' %}
+            Good {{ states('sensor.time_of_day') }} person 1.
+          {% endif %}
