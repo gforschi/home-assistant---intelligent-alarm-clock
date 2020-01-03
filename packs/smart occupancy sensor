@@ -1,0 +1,83 @@
+input_boolean:
+  person1_occupancy:
+    name: "Person 1 is home"
+  person1_awake:
+    name: "Person 1 is awake"
+
+binary_sensor:
+  - platform: template
+    sensors:
+      person1_awake:
+        friendly_name: "Person1 is awake"
+        value_template: >
+          {{ not (is_state('input_boolean.person1_awake', 'off') and is_state('input_boolean.person1_occupancy', 'on')) }}
+        icon_template: >
+          {% if not (is_state('input_boolean.person1_awake', 'off') and is_state('input_boolean.person1_occupancy', 'on')) %}
+            mdi:account
+          {% else %}
+            mdi:mdi:sleep
+          {% endif %}
+
+sensor:
+  - platform: template
+    sensors:
+      person1_status_adv:
+        entity_id:
+          - sensor.time
+          - input_boolean.person1_occupancy
+          - input_boolean.person1_awake
+          - device_tracker.person1_gps
+        value_template: >
+          {% if is_state('input_boolean.person1_occupancy', 'on') %}
+            {% if is_state('input_boolean.person1_awake', 'on') %}
+              {% if (((as_timestamp(now()) - as_timestamp(states.input_boolean.person1_occupancy.last_changed)|float)/60)|round(0)) < 15 %}
+                Just arrived
+              {% else %}
+                Home
+              {% endif %}
+            {% elif is_state('input_boolean.person1_awake', 'off') %}
+              Sleeping
+            {% endif %}
+          {% elif is_state('input_boolean.person1_occupancy', 'off') %}
+            {% if is_state('device_tracker.person1_gps', 'Zone of Office') %}
+              Work
+            {% elif (((as_timestamp(now()) - as_timestamp(states.input_boolean.person1_occupancy.last_changed)|float)/60)|round(0)) < 15 %}
+              Just left
+            {% elif (((as_timestamp(now()) - as_timestamp(states.input_boolean.person1_occupancy.last_changed)|float)/60)|round(0)) > 1440 %}
+              Extended Away
+            {% else %}
+              Away
+            {% endif %}
+          {% endif %}
+        icon_template: >
+          {% if is_state('sensor.person1_status_adv', 'Just arrived') %}
+            mdi:home-account
+          {% elif is_state('sensor.person1_status_adv', 'Home') %}
+            mdi:home-account
+          {% elif is_state('sensor.person1_status_adv', 'Sleeping') %}
+            mdi:sleep
+          {% elif is_state('sensor.person1_status_adv', 'Just left') %}
+            mdi:home-outline
+          {% elif is_state('sensor.person1_status_adv', 'Away') %}
+            mdi:home-outline
+          {% elif is_state('sensor.person1_status_adv', 'Work') %}
+            mdi:briefcase
+          {% elif is_state('sensor.person1_status_adv', 'Extended away') %}
+            mdi:airplane
+          {% endif %}
+
+automation:
+  - alias: 'Set persons occupancy on or off'
+    initial_state: true
+    trigger:
+    - platform: state
+      entity_id: binary_sensor.person1_connected_wifi_bt
+    condition: []
+    action:
+    - entity_id: input_boolean.occupancy_geir
+      service_template: >
+          {% if trigger.to_state == 'on' %}
+            input_boolean.turn_on
+          {% elif trigger.to_state == 'off' %}
+            input_boolean.turn_off
+          {% endif %}
