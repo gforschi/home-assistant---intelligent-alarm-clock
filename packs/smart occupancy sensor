@@ -74,7 +74,7 @@ automation:
       entity_id: binary_sensor.person1_connected_wifi_bt
     condition: []
     action:
-    - entity_id: input_boolean.occupancy_geir
+    - entity_id: input_boolean.person1_occupancy
       service_template: >
           {% if trigger.to_state == 'on' %}
             input_boolean.turn_on
